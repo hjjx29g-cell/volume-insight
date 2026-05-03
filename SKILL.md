@@ -385,3 +385,17 @@ status: draft
   - 检测到极端值（CMF>0.5或<-0.5，VWAP偏离>5%）
   - 小盘股（流通市值<50亿）
   - 重大消息日或停牌复牌首日
+
+## 7. 目录结构说明
+
+- `SKILL.md` — **主规范**（适用范围、输入、判断规则、标准 JSON）
+- `references/` — 指标卡片与公式
+- `scripts/` — 指标计算与 `analyzer_main.py`
+- `assets/` — Markdown 报告模板（可与 `meta.report_markdown` 联调）
+- `examples/`、`tests/` — 示例与单测
+
+## 8. 示例
+
+`examples/run_example.sh` 演示了如何使用 sample_data.csv 进行分析。
+
+
