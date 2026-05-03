@@ -3,11 +3,7 @@ import numpy as np
 from compute_obv import compute_obv
 from compute_adl import compute_adl
 from compute_cmf import compute_cmf
-
-def compute_vwap(typical_prices, volumes):
-    cum_pv = np.sum(typical_prices * volumes)
-    cum_vol = np.sum(volumes)
-    return cum_pv / cum_vol if cum_vol != 0 else np.nan
+from compute_vwap import compute_vwap
 
 def analyze(df):
     """
@@ -22,8 +18,8 @@ def analyze(df):
     obv = compute_obv(close, volume)
     adl = compute_adl(high, low, close, volume)
     cmf = compute_cmf(high, low, close, volume, window=20)
-    typical = (high + low + close) / 3
-    vwap = compute_vwap(typical, volume)
+    vwap_series = compute_vwap(high, low, close, volume)
+    vwap = float(vwap_series[-1]) if len(vwap_series) else float("nan")
 
     last_close = close[-1]
     last_obv_trend = "上升" if len(obv)>5 and obv[-1] > obv[-5] else "下降"
@@ -39,7 +35,14 @@ def analyze(df):
     else:
         cmf_rating = "强流出"
 
-    price_vs_vwap = "高于" if last_close > vwap else "低于"
+    if np.isnan(vwap):
+        price_vs_vwap = "N/A"
+    elif last_close > vwap:
+        price_vs_vwap = "高于"
+    elif last_close < vwap:
+        price_vs_vwap = "低于"
+    else:
+        price_vs_vwap = "等于"
 
     return {
         "obv_trend": last_obv_trend,

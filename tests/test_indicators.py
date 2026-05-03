@@ -4,6 +4,7 @@ import sys
 sys.path.append('../scripts')
 from compute_obv import compute_obv
 from compute_adl import compute_adl
+from compute_vwap import compute_vwap
 
 class TestVolumeIndicators(unittest.TestCase):
     def test_obv_basic(self):
@@ -20,6 +21,14 @@ class TestVolumeIndicators(unittest.TestCase):
         volume = np.array([100, 200, 150, 300])
         adl = compute_adl(high, low, close, volume)
         self.assertEqual(len(adl), len(close))
+
+    def test_vwap_cumulative(self):
+        high = np.array([10, 11, 12])
+        low = np.array([8, 9, 10])
+        close = np.array([9, 10, 11])
+        volume = np.array([100, 100, 100])
+        vwap = compute_vwap(high, low, close, volume)
+        np.testing.assert_allclose(vwap, [9.0, 9.5, 10.0])
 
 if __name__ == '__main__':
     unittest.main()

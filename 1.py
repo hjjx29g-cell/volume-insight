@@ -174,9 +174,10 @@ ADL_t = ADL_{t-1} + MFV_t
 ## CMF (20-day)
 CMF_t = sum_{i=t-19}^{t} MFV_i / sum_{i=t-19}^{t} Volume_i
 
-## VWAP (cumulative over entire interval)
-VWAP = sum( TypicalPrice_i × Volume_i ) / sum( Volume_i )  
-TypicalPrice_i = (High_i + Low_i + Close_i) / 3
+## VWAP (cumulative over interval, per bar)
+TypicalPrice_i = (High_i + Low_i + Close_i) / 3  
+VWAP_t = sum_{i=0..t}( TypicalPrice_i × Volume_i ) / sum_{i=0..t}( Volume_i )  
+（脚本 `scripts/compute_vwap.py` 输出与 K 线等长的序列；最后一根即全区间 VWAP。）
 ''',
 
     "scripts/compute_obv.py": '''import numpy as np
@@ -228,16 +229,37 @@ def compute_cmf(high, low, close, volume, window=20):
     return cmf
 ''',
 
+    "scripts/compute_vwap.py": '''import numpy as np
+
+
+def compute_vwap(high, low, close, volume):
+    """
+    区间内逐根 K 线的累积 VWAP（日线常用：从序列起点到 t 的成交量加权典型价）。
+    Typical = (High + Low + Close) / 3
+    VWAP[t] = sum_{i=0..t}(TP_i * V_i) / sum_{i=0..t}(V_i)
+    """
+    typical = (
+        np.asarray(high, dtype=float)
+        + np.asarray(low, dtype=float)
+        + np.asarray(close, dtype=float)
+    ) / 3.0
+    vol = np.asarray(volume, dtype=float)
+    cum_pv = np.cumsum(typical * vol)
+    cum_vol = np.cumsum(vol)
+    return np.divide(
+        cum_pv,
+        cum_vol,
+        out=np.full_like(cum_pv, np.nan, dtype=float),
+        where=cum_vol > 0,
+    )
+''',
+
     "scripts/analyzer_main.py": '''import pandas as pd
 import numpy as np
 from compute_obv import compute_obv
 from compute_adl import compute_adl
 from compute_cmf import compute_cmf
-
-def compute_vwap(typical_prices, volumes):
-    cum_pv = np.sum(typical_prices * volumes)
-    cum_vol = np.sum(volumes)
-    return cum_pv / cum_vol if cum_vol != 0 else np.nan
+from compute_vwap import compute_vwap
 
 def analyze(df):
     """
@@ -252,8 +274,8 @@ def analyze(df):
     obv = compute_obv(close, volume)
     adl = compute_adl(high, low, close, volume)
     cmf = compute_cmf(high, low, close, volume, window=20)
-    typical = (high + low + close) / 3
-    vwap = compute_vwap(typical, volume)
+    vwap_series = compute_vwap(high, low, close, volume)
+    vwap = float(vwap_series[-1]) if len(vwap_series) else float("nan")
 
     last_close = close[-1]
     last_obv_trend = "上升" if len(obv)>5 and obv[-1] > obv[-5] else "下降"
@@ -269,7 +291,14 @@ def analyze(df):
     else:
         cmf_rating = "强流出"
 
-    price_vs_vwap = "高于" if last_close > vwap else "低于"
+    if np.isnan(vwap):
+        price_vs_vwap = "N/A"
+    elif last_close > vwap:
+        price_vs_vwap = "高于"
+    elif last_close < vwap:
+        price_vs_vwap = "低于"
+    else:
+        price_vs_vwap = "等于"
 
     return {
         "obv_trend": last_obv_trend,
@@ -390,6 +419,7 @@ import sys
 sys.path.append('../scripts')
 from compute_obv import compute_obv
 from compute_adl import compute_adl
+from compute_vwap import compute_vwap
 
 class TestVolumeIndicators(unittest.TestCase):
     def test_obv_basic(self):
@@ -406,6 +436,14 @@ class TestVolumeIndicators(unittest.TestCase):
         volume = np.array([100, 200, 150, 300])
         adl = compute_adl(high, low, close, volume)
         self.assertEqual(len(adl), len(close))
+
+    def test_vwap_cumulative(self):
+        high = np.array([10, 11, 12])
+        low = np.array([8, 9, 10])
+        close = np.array([9, 10, 11])
+        volume = np.array([100, 100, 100])
+        vwap = compute_vwap(high, low, close, volume)
+        np.testing.assert_allclose(vwap, [9.0, 9.5, 10.0])
 
 if __name__ == '__main__':
     unittest.main()
