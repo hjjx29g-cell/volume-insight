@@ -4,7 +4,7 @@
 | owner_group | 专家2组（指标） |
 | domain | technical |
 | status | active |
-| enabled | true |
+| enabled | false |
 
 # Volume Insight – Four‑Indicator Liquidity & Money Flow Analysis
 
