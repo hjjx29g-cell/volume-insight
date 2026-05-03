@@ -1,4 +1,7 @@
 # 📊 量能综合分析报告 – {股票名称/代码}
+
+> **与主仓契约**：AI Renaissance 流程中优先产出标准 **`Signal` JSON**（见 `SKILL.md` §5）。本 Markdown 为人类可读附录，可填入 `meta.report_markdown` 或单独存档。
+
 **分析周期**：{start_date} 至 {end_date}（共 {n_days} 个交易日）
 
 ## 1️⃣ OBV – 资金方向
