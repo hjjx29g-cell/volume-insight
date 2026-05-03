@@ -1,7 +1,7 @@
 ---
 name: volume_price_momentum_analysis
 description: 基于OBV、A/D Line、VWAP、CMF四大量价指标，判断标的资金流动方向、主力吸筹/派发状态、价格与量能配合度，适用于中短期趋势确认与反转预警。
-owner_group: 专家组-技术分析
+owner_group: 专家2组（指标）
 domain: technical
 status: draft
 ---
