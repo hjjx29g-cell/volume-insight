@@ -19,6 +19,8 @@ status: draft
 边界说明：
 
 - 缺列、样本不足、复权/成交量口径不明时，须 **降低 `confidence`**、**标 `needs_human_review`**，在 `meta.uncertainties` 写明。
+- 小盘股（流通市值<50亿）或庄股需人工复核，指标容易被操纵。
+- 重大消息日、停牌复牌首日指标失真，标记人工复核。
 - 本 Skill 仅覆盖 **技术量能维度**，**不替代**基本面、公告与消息面；结论 **不构成投资建议**；`risk_level` 较高或需复核时，**不得单独**作为交易指令。
 
 ## 2. 输入材料
@@ -29,12 +31,6 @@ status: draft
 - **时间范围**：分析区间起止日期，与 OHLCV 对齐
 - **核心数据材料**：**行情 OHLCV**（每行至少 `date, open, high, low, close, volume`；列名可映射，须在 `meta.uncertainties` 说明）
 - **数据来源**：行情终端、CSV/JSON 上传、开发3组行情接口等（证据中 `source_type` 用 `market_data`）
-
-### 可选输入
-
-- 人工补充观点、截图
-- 研报摘要、新闻链接
-- 历史同期或基准指数 OHLCV（对比时写入 `meta.evidence`）
 
 ### 缺失处理
 
