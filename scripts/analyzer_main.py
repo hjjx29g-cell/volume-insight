@@ -24,16 +24,16 @@ def analyze(df):
     last_close = close[-1]
     last_obv_trend = "上升" if len(obv)>5 and obv[-1] > obv[-5] else "下降"
     cmf_last = cmf[-1] if not np.isnan(cmf[-1]) else 0
-    if cmf_last > 0.2:
-        cmf_rating = "强流入"
-    elif cmf_last > 0.1:
-        cmf_rating = "弱流入"
-    elif cmf_last > -0.1:
+    if cmf_last > 0.25:
+        cmf_rating = "强势流入"
+    elif cmf_last > 0.05:
+        cmf_rating = "温和流入"
+    elif cmf_last > -0.05:
         cmf_rating = "中性"
-    elif cmf_last > -0.2:
-        cmf_rating = "弱流出"
+    elif cmf_last > -0.25:
+        cmf_rating = "温和流出"
     else:
-        cmf_rating = "强流出"
+        cmf_rating = "强势流出"
 
     if np.isnan(vwap):
         price_vs_vwap = "N/A"

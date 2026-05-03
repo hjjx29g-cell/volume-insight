@@ -1,12 +1,12 @@
-# Volume Insight Skill – 量能指标综合分析
+# 量价动量综合分析 Skill – 量能指标系统诊断
 
 本 Skill 提供 OBV、A/D Line、CMF、VWAP 四个核心量能指标的系统化分析；并入 [AI_Renaissance](https://github.com/duolongworld/AI_Renaissance) 时，**唯一规范文件为根目录 `SKILL.md`**（YAML frontmatter + `Signal` JSON 契约，与主仓 `docs/SKILL_TEMPLATE.md` 对齐）。
 
 ## 安装使用
 
-1. 将本仓库复制到主仓推荐路径：`skills/technical/volume_insight/`（与 `SKILL.md` 中 `name: volume_insight` 一致）。
+1. 将本仓库复制到主仓推荐路径：`skills/technical/volume_price_momentum_analysis/`（与 `SKILL.md` 中 `name: volume_price_momentum_analysis` 一致）。
 2. Agent 联调时读取 **`SKILL.md`**。
-3. 提供 OHLCV（CSV 等，至少约 30 个交易日）或股票代码 + 日期范围。
+3. 提供 OHLCV（CSV 等，至少约 60 个交易日，覆盖 3 个月以上）或股票代码 + 日期范围。
 
 ## 示例
 
