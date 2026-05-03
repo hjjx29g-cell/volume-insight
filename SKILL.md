@@ -1,165 +1,175 @@
 ---
 name: volume_insight
-description: 基于 OHLCV 对 OBV、A/D Line、CMF(20)、区间累积 VWAP 做四指标量能综合诊断；在用户提及量能、资金流向、OBV/A/D/CMF/VWAP 或「量能分析」类问题时启用。输出须对齐标准 Signal JSON，并可附 Markdown 报告草稿至 meta。
+description: 基于 OHLCV 计算 OBV、A/D Line、CMF(20)、区间累积 VWAP 四指标并计票，输出技术面 Signal；在用户提及量能、资金流向、OBV/A/D/CMF/VWAP、量价背离或「量能分析」时启用。
 owner_group: 专家2组（指标）
 domain: technical
 status: draft
 ---
 
-# Volume Insight — 四指标量能与资金流向综合 Skill（AI Renaissance v0.1 对齐）
-
-本 Skill 将 **OBV（方向）**、**A/D Line（质量）**、**CMF（强度）**、**区间累积 VWAP（成本基准）** 结合，形成可仲裁的技术面 `Signal`。专业释义与公式见 `references/`；可复用计算见 `scripts/`。
-
-**实现约定（避免与行情软件混淆）**：本仓库 `scripts/compute_vwap.py` 为 **日线序列上的区间累积 VWAP**（典型价 (H+L+C)/3，从样本起点逐根累积），**不是**「每个交易日重置的日内分时 VWAP」。证据与结论中应使用「区间 VWAP」表述。
-
----
+# 量能四指标综合诊断（volume_insight）
 
 ## 1. 适用范围
 
-**所属小组**：专家2组（指标）
+所属小组：专家2组（指标）
 
-**适用任务**：
+适用任务：
 
-- 单标的或给定 OHLCV 序列的量能结构、资金流向强弱、量价背离粗判。
-- 需要把四指标压缩为 **bullish / bearish / neutral** 与置信度，供上层仲裁。
+- 从 OHLCV 判断 **量能偏多 / 偏空 / 中性**，并给出 **置信度、证据、风险等级**，供开发2组仲裁与主流程汇总。
+- 适合分析 **个股、ETF、指数** 等具备可靠 **日线（为主）OHLCV** 的标的。
+- 适合 **最近 N 个交易日**（建议有效样本 ≥ 30 日）；周线需在 `meta.uncertainties` 说明。
 
-**适用对象**：股票、ETF、指数等具备可靠 OHLCV 的标的（流动性过差时降低 confidence）。
+边界说明：
 
-**适用周期**：以日线为主；最小样本见「输入材料」。若仅有周线，可运行但须在 `meta.uncertainties` 说明周期。
-
-**边界说明**：
-
-- 本 Skill **不替代**基本面、财报与消息面；结论为 **技术量能维度**，默认 `time_horizon` 偏 `short`～`mid`。
-- **不构成投资建议**；`risk_level` 较高或 `needs_human_review` 为 true 时，禁止单独作为交易依据。
-- 仅问纯价格指标（如单独 RSI/MACD）且明确不需要成交量时，**不要**启用本 Skill。
-
----
+- 缺列、样本不足、复权/成交量口径不明时，须 **降低 `confidence`**、**标 `needs_human_review`**，在 `meta.uncertainties` 写明。
+- 本 Skill 仅覆盖 **技术量能维度**，**不替代**基本面、公告与消息面；结论 **不构成投资建议**；`risk_level` 较高或需复核时，**不得单独**作为交易指令。
 
 ## 2. 输入材料
 
 ### 必填输入
 
-| 项目 | 说明 |
-|------|------|
-| 标的 | 股票代码 / 名称 / 指数代码（无代码时写入 `meta.target` 文本） |
-| 时间范围 | 分析区间起止日期；须能对应到 OHLCV 行 |
-| 核心数据 | **OHLCV**：每行至少 `date, open, high, low, close, volume`（列名可映射，须在 `meta.uncertainties` 说明） |
-| 数据来源 | `market_data`：行情终端、CSV 上传、开发3组数据接口等 |
+- **标的**：公司名 / 股票代码 / 指数代码（无代码可将名称写入 `meta.target`）
+- **时间范围**：分析区间起止日期，与 OHLCV 对齐
+- **核心数据材料**：**行情 OHLCV**（每行至少 `date, open, high, low, close, volume`；列名可映射，须在 `meta.uncertainties` 说明）
+- **数据来源**：行情终端、CSV/JSON 上传、开发3组行情接口等（证据中 `source_type` 用 `market_data`）
 
 ### 可选输入
 
-- 人工观点、截图、研报摘要
-- 行业或基准指数 OHLCV（用于相对强弱时，在证据中单独列出）
+- 人工补充观点、截图
+- 研报摘要、新闻链接
+- 历史同期或基准指数 OHLCV（对比时写入 `meta.evidence`）
 
 ### 缺失处理
 
-- **缺少必填 OHLCV 任一字段、或可解析行数 &lt; 30**：输出 `direction: "neutral"`，`confidence` ≤ 0.35，在 `meta.uncertainties` 写明缺失项；`meta.needs_human_review: true`。
-- **VWAP 无法计算**（例如有效成交量累加为 0）：该子项不计票；`uncertainties` 说明；若同时缺多项子指标，`needs_human_review: true`。
-- **可选输入缺失**：可继续分析，在 `meta.uncertainties` 说明可能偏差。
-
----
+- 若 **必填 OHLCV 缺失任一行、或可解析有效交易日 &lt; 30**：输出 `direction: "neutral"`，**降低 `confidence`**（建议 ≤ 0.35），在 `meta.uncertainties` 写明缺什么，**`meta.needs_human_review: true`**。
+- 若 **VWAP 无法计算**（如成交量累加为 0）：该子规则不计票，写入 `uncertainties`；多指标同时失效时 **`needs_human_review: true`**。
+- 若 **可选输入缺失**：可继续分析，在 `meta.uncertainties` 说明可能影响。
 
 ## 3. 分析步骤
 
-1. 确认标的、区间、数据来源；检查 OHLCV 列与单位（成交量是否复权一致须在证据或 uncertainties 中说明）。
-2. 校验样本量：有效交易日 **≥ 30**；不足则按「缺失处理」降级输出。
-3. 计算或调用脚本：`OBV`、`A/D Line`、`CMF(20)`、`区间累积 VWAP`（见 `scripts/`）；CMF 前若干根可能为 NaN，使用最后一根有效 CMF 或按脚本约定处理。
-4. **背离（20 日窗口）**：比较价格与 OBV 的局部极值；记录是否存在顶/底背离（写入 `meta.evidence`）。
-5. **A/D 与 OBV 一致性**：近 20 日 A/D 与 OBV 同向为一致，反向为矛盾（降低 `confidence`，写入 `uncertainties`）。
-6. 按 **§4 判断规则** 汇总 `direction`、`confidence`、`risk_level`。
-7. 组装 **§5 标准输出 JSON**；`meta.key_findings` 3～5 条短句；详细推理写入 `reasoning`。
-8. **（可选）** 按 `assets/report-template.md` 生成 Markdown 报告草稿，全文可放入 `meta.report_markdown`（若主仓 `Signal` 暂未定义该字段，则作为联调扩展字段保留在 `meta` 中，或拆入 `key_findings`）。
+按下面步骤分析：
 
----
+1. 明确分析对象、时间范围和数据来源（复权、成交量单位写入证据或 `uncertainties`）。
+2. 检查输入数据是否足够（有效交易日 ≥ 30；不足则按 §2 缺失处理降级）。
+3. 提取关键指标：计算或调用 `scripts/` 得到 **OBV、A/D Line、CMF(20)、区间累积 VWAP**（CMF 取最后一根有效值）；**20 日**内判断价 vs OBV **顶/底背离**；**20 日**内判断 A/D 与 OBV **同向或矛盾**。
+4. 按 **§4 判断规则** 计偏多票 `B`、偏空票 `S`，映射 **`direction`**，并按票差与矛盾情况给出 **`confidence`**、**`meta.risk_level`**。
+5. 给出证据：每条关键结论对应 **`meta.evidence`**（指标名、数值或定性、对比阈值、数据来源日期）。
+6. 标注 **`meta.uncertainties`**、**`meta.needs_human_review`**、**`meta.time_horizon`**（默认 `short`，较长日线趋势可 `mid`）。
+7. 输出 **标准 JSON**（§5 结构）。
+
+**实现约定**：本仓库 **VWAP** 为 **日线区间累积**（典型价 (H+L+C)/3），**不是**「每交易日重置的日内 VWAP」；证据与表述中用 **「区间 VWAP」**。详见 `scripts/compute_vwap.py`、`references/`。
 
 ## 4. 判断规则
 
-以下规则用于 **每次** 分析产生 `direction`、`confidence`、`risk_level`。子指标数值应由数据计算，不得虚构。
+本 Skill 的专业规则为 **四维度计票**（OBV、A/D、CMF、VWAP），再合成方向与置信度。每条子规则须写清：
 
-### 4.1 计票（偏多票 / 偏空票）
+| 要素 | 本 Skill 约定 |
+|------|----------------|
+| 判断指标 | OBV 趋势与背离、A/D 20 日方向、CMF(20) 末值、收盘价 vs 区间 VWAP |
+| 阈值或比较对象 | CMF 与 ±0.1 分界；票差与 2 比较 |
+| 时间窗口 | OBV **5 日**趋势与 **20 日**背离；A/D **20 日** |
+| 对 `direction` 的影响 | 由 `B−S` 与 2 的关系决定 bull/bear/neutral |
+| 对 `confidence`、`risk_level` 的影响 | 见 §4.3、§4.4；A/D 与 OBV 显著矛盾时降置信、`risk_level` 至少 `medium` |
 
-在有效数据前提下，四行子规则各 **最多贡献 1 票**（共最多 4 票偏多、4 票偏空）。
+**规则摘要**：
 
-**偏多票 +1 当：**
+- 若 **A/D 与 OBV 显著矛盾**：A/D 相关 **不计票**，`neutral` 倾向增强，**降低 `confidence`**，`meta.uncertainties` 写明矛盾。
+- 若 **CMF ∈ [-0.1, 0.1]**：CMF 维度 **不计票**。
+- 若 **指标互相矛盾** 或 **证据不足**：输出 `neutral` 或降低置信，**`needs_human_review: true`**。
 
-| 子规则 | 条件 |
-|--------|------|
-| OBV | 近 5 日 OBV 相对 5 日前为**上升**，**或**（20 日内**底背离**：价创新低而 OBV 未创新低）— 二者满足其一即可 +1，不重复计 |
-| A/D | 近 20 日 A/D 序列整体**抬升**（末值高于期初足够幅度，或线性斜率 &gt; 0），且与 OBV **不矛盾**（见 4.1 末） |
-| CMF | 最后一根有效 CMF(20) **&gt; 0.1** |
+### 4.1 计票（每维度最多 1 票）
+
+令 **B** = 偏多票合计，**S** = 偏空票合计（各 ≤ 4）。
+
+**偏多 +1**：
+
+| 维度 | 条件 |
+|------|------|
+| OBV | 近 5 日相对上升，**或** 20 日内 **底背离**（价创新低 OBV 未新低）；二选一不重复计 |
+| A/D | 近 20 日整体抬升，且与 OBV **不显著矛盾** |
+| CMF | CMF(20) 末值 **&gt; 0.1** |
 | VWAP | 收盘价 **&gt;** 区间累积 VWAP（序列最后一根） |
 
-**偏空票 +1 当：**
+**偏空 +1**：
 
-| 子规则 | 条件 |
-|--------|------|
-| OBV | 近 5 日 OBV **下降**，**或**（20 日内**顶背离**：价创新高而 OBV 未创新高）— 满足其一 +1 |
-| A/D | 近 20 日 A/D 整体**下行**，且与 OBV **不矛盾** |
-| CMF | 最后一根有效 CMF(20) **&lt; -0.1** |
-| VWAP | 收盘价 **&lt;** 区间累积 VWAP |
+| 维度 | 条件 |
+|------|------|
+| OBV | 近 5 日下降，**或** 20 日内 **顶背离** |
+| A/D | 近 20 日整体下行，且与 OBV **不显著矛盾** |
+| CMF | CMF(20) 末值 **&lt; -0.1** |
+| VWAP | 收盘价 **&lt;** 区间 VWAP |
 
-**CMF 中性带**：CMF ∈ [-0.1, 0.1] 时，CMF 子项**不计**多/空票。
+**显著矛盾**：A/D 与 OBV 一正一负且斜率均显著时，**A/D 两行均不计票**，`risk_level` 至少 **medium**。
 
-**A/D 与 OBV 明显矛盾**（一正斜率一负斜率且均显著）：两边 A/D 子项**均不计票**，并在 `meta.uncertainties` 记录；`risk_level` 至少 `medium`。
+### 4.2 `direction`
 
-### 4.2 综合方向 `direction`
-
-令 `B` = 偏多票合计，`S` = 偏空票合计（各最高 4 票）。
-
-- 若 `B - S >= 2` → `bullish`
-- 若 `S - B >= 2` → `bearish`
+- `B − S ≥ 2` → `bullish`
+- `S − B ≥ 2` → `bearish`
 - 否则 → `neutral`
+- 有效交易日 **&lt; 30**：**强制** `neutral`，`confidence` ≤ 0.35
 
-若有效交易日 &lt; 30：**强制** `neutral`，`confidence` ≤ 0.35。
+### 4.3 `confidence`（0.0～1.0）
 
-### 4.3 置信度 `confidence`（0.0～1.0）
+非强制 `neutral` 时，按 **票差绝对值**（B 与 S 之差的绝对值）：
 
-在已得 `direction` 且非强制 neutral 时：
+| 票差绝对值 | 建议区间 |
+|------------|----------|
+| 2 | 0.50～0.65 |
+| 3 | 0.65～0.80 |
+| ≥ 4 | 0.75～0.90 |
 
-| 条件 | confidence 建议区间 |
-|------|---------------------|
-| `|B - S| == 2` | 0.50～0.65 |
-| `|B - S| == 3` | 0.65～0.80 |
-| `|B - S| >= 4` | 0.75～0.90 |
+存在 A/D 与 OBV 矛盾、单指标缺失、量能过薄：在区间内 **减 0.10～0.20**。强制 `neutral`：**0.25～0.40**。
 
-**下调**：存在 A/D 与 OBV 矛盾、或单一指标缺失、或成交量异常稀薄 → 在区间基础上 **减 0.10～0.20**，且不低于 0.0。
+### 4.4 `meta.risk_level`
 
-**强制 neutral** 时：`confidence` 0.25～0.40（视缺失程度）。
+- **low**：四指标可算，票差清晰，无硬矛盾  
+- **medium**：有背离、A/D 与 OBV 轻度不一致、或 CMF 中性且其它指标分裂  
+- **high**：数据口径存疑、或多指标激烈冲突且用户强求方向  
 
-### 4.4 风险等级 `meta.risk_level`
+### 4.5 `meta.needs_human_review`
 
-- `low`：四指标可计算，票差清晰，无背离与矛盾。
-- `medium`：存在背离、或 A/D 与 OBV 轻微不一致、或 CMF 在 [-0.1, 0.1] 且其它指标分裂。
-- `high`：数据质量存疑（大量缺失、复权/单位不明）、或多指标强烈冲突且用户要求明确方向。
+缺必填数据、&lt;30 日、`risk_level: high`、VWAP/CMF 无有效终值、用户声明实盘但无来源说明等 → **true**
 
-### 4.5 `meta.time_horizon`
+### 从自然语言翻译成 Skill 规则（技术面示例）
 
-默认 `short`；若用户明确分析季度以上日线趋势且无日内需求，可填 `mid`。
+```text
+盘面判断：
+价格创 20 日新高，但 OBV 未创新高，怀疑量价顶背离。
+```
 
-### 4.6 `meta.needs_human_review`
+翻译成 Skill 规则：
 
-以下任一为 true：
-
-- 必填数据缺失或 &lt; 30 日有效样本
-- `risk_level == high`
-- VWAP / CMF 无法得到有效终值
-- 用户声明用于实盘决策且未提供数据来源说明
-
----
+```text
+指标：收盘价极值 vs OBV 极值（20 日窗口）
+阈值：价新高且 OBV 未新高 → 顶背离成立
+direction：为计票贡献偏空票 +1（若同时满足 OBV 下降则仍只计一次该维度）
+confidence：若仅单一背离、其余指标中性，不宜高于 0.65；需写入 meta.evidence 与 uncertainties
+risk_level：至少 medium（背离）
+evidence：记录窗口起止、价与 OBV 峰值日期与数值、OHLCV 来源
+needs_human_review：若数据复权或切片边界不清 → true
+```
 
 ## 5. 标准输出
 
-最终输出 **JSON**，顶层字段与 `agents.signal.Signal` 对齐；扩展信息放入 `meta`。
+最终输出 JSON，顶层字段与当前项目 `agents.signal.Signal` 对齐。当前代码已经支持的字段放在顶层；给开发2组后续仲裁、展示、追溯使用的补充字段，先放在 `meta` 中。
+
+这里的 `meta` 是 Skill 输出的一部分，不是可有可无的附注。第一阶段 v0.1 规范中，证据、风险等级、时间周期、关键发现、不确定性和人工复核点统一放在 `meta` 中。
+
+本 Skill 须写清楚：
+
+- **证据从哪里来**：OHLCV 行情 → `source_type: market_data`  
+- **风险等级如何判断**：§4.4  
+- **时间周期如何判断**：默认 `short`，较长日线趋势可 `mid`（§4 已述）  
+- **关键发现如何提取**：3～5 条写入 `meta.key_findings`  
+- **何时人工复核**：§4.5  
+
+Agent 读取本 Skill 后，按上述规则生成 JSON；开发2组汇总仲裁时读取 `meta` 中证据与上下文。后续若 `output_version` 变更，由开发1组统一发布。
 
 ```json
 {
-  "direction": "bullish",
-  "confidence": 0.72,
-  "reasoning": "一句话到一小段：为何给出该方向与置信度。",
-  "signals": [
-    "OBV 上升且价在区间 VWAP 上方",
-    "CMF(20) 处于弱流入区"
-  ],
+  "direction": "bullish | bearish | neutral",
+  "confidence": 0.0,
+  "reasoning": "",
+  "signals": [],
   "source": "volume_insight",
   "signal_type": "technical",
   "stock_code": "",
@@ -169,57 +179,146 @@ status: draft
     "skill_name": "volume_insight",
     "owner_group": "专家2组（指标）",
     "target": "",
-    "period": "YYYY-MM-DD ~ YYYY-MM-DD",
-    "time_horizon": "short",
-    "risk_level": "medium",
+    "period": "",
+    "time_horizon": "short | mid | long",
+    "risk_level": "low | medium | high",
     "key_findings": [],
     "evidence": [
       {
-        "source_type": "market_data",
-        "source_name": "OHLCV 行情",
+        "source_type": "financial_report | announcement | market_data | fund_flow | macro_data | industry_data | news | social_media | research_report | expert_input",
+        "source_name": "",
         "date": "",
-        "metric": "CMF(20) 终值",
+        "metric": "",
         "value": "",
-        "comparison": "阈值 ±0.1 / ±0.2",
+        "comparison": "",
         "note": ""
       }
     ],
     "risk_notes": [],
     "uncertainties": [],
-    "needs_human_review": false,
-    "report_markdown": ""
+    "needs_human_review": true
   }
 }
 ```
 
 **说明**：
 
-- `direction` 仅 `bullish` | `bearish` | `neutral`。
-- `signal_type` 固定 `technical`。
-- `source` 建议填 `volume_insight`（与 `skill_name` 一致便于仲裁）。
-- `meta.evidence` 至少 **1 条**，须包含 OBV/CMF/VWAP/A-D 中实际用到的关键数值或定性结论；`source_type` 为行情时用 `market_data`。
-- `meta.report_markdown`：若生成完整 Markdown 报告，可放于此；若主仓校验不允许空字符串外扩展，联调前与开发1组确认；否则可省略该键。
+- `direction` 只能是 `bullish`、`bearish`、`neutral`。当前代码暂不支持 `risk_warning` 作为方向。
+- 本 Skill 固定 **`signal_type: "technical"`**；`source` 建议填 **`volume_insight`**（与 `skill_name` 一致）。
+- `confidence` 范围 0.0～1.0。
+- `signals` 写核心短句（如「CMF(20) 弱流入 + 价上区间 VWAP」）。
+- `reasoning` 写简明推理；**详细数值与对比**进 `meta.evidence`。
+- 可选：将人类可读 Markdown 报告（见 `assets/report-template.md`）作为联调扩展放入 `meta` 额外字段前，**与开发1组确认**是否纳入 Schema。
+
+### 填写示例（本 Skill 典型一条 evidence）
+
+```json
+{
+  "source_type": "market_data",
+  "source_name": "OHLCV 日线",
+  "date": "2026-04-30",
+  "metric": "CMF(20) 终值",
+  "value": "0.15",
+  "comparison": "> 0.1 偏多计票阈值",
+  "note": "与 OBV 5 日上升、收盘 > 区间 VWAP 一致"
+}
+```
+
+## 字段中英对照
+
+| 字段 | 中文含义 | 填写说明 |
+|---|---|---|
+| `direction` | 方向 | `bullish` 看多；`bearish` 看空；`neutral` 中性 |
+| `confidence` | 置信度 | 0.0 到 1.0，越高表示越确定 |
+| `reasoning` | 推理摘要 | 用一小段话说明为什么得出这个结论 |
+| `signals` | 核心信号 | 放最重要的短句 |
+| `source` | 信号来源 | 本 Skill 填 `volume_insight` |
+| `signal_type` | 信号类型 | 本 Skill 固定 `technical` |
+| `stock_code` | 股票代码 | 没有时可留空，标的写入 `meta.target` |
+| `weight` | 权重 | 先填 1.0，后续由仲裁层决定 |
+| `meta` | 证据包/上下文包 | 证据、风险等级、时间周期、人工复核点等 |
+| `time_horizon` | 时间周期 | `short` 短期；`mid` 中期；`long` 长期 |
+| `risk_level` | 风险等级 | `low` 低；`medium` 中；`high` 高 |
+| `evidence` | 证据 | 记录来源、日期、指标、数值和说明 |
+| `uncertainties` | 不确定性 | 数据缺失、口径不一致、需要复核的地方 |
+| `needs_human_review` | 是否需要人工复核 | `true` 是；`false` 否 |
+
+## `source_type` 来源类型
+
+本 Skill **以 `market_data` 为主**；若证据含研报、新闻等，按实际类型填写。
+
+| source_type | 中文含义 | 示例 |
+|---|---|---|
+| `financial_report` | 财报 | 年报、季报、现金流量表 |
+| `announcement` | 公告 | 交易所公告、重大事项 |
+| `market_data` | 行情数据 | **OHLCV、本 Skill 四指标计算结果** |
+| `fund_flow` | 资金流数据 | 主力资金、北向资金 |
+| `macro_data` | 宏观数据 | 利率、PMI、CPI |
+| `industry_data` | 行业数据 | 产业链价格、开工率 |
+| `news` | 新闻 | 财经新闻、政策新闻 |
+| `social_media` | 社交舆情 | 股吧、雪球 |
+| `research_report` | 研报 | 券商研报 |
+| `expert_input` | 人工输入 | 专家组补充材料 |
+
+## `domain`、`source`、`source_type` 的区别
+
+| 字段 | 一句话解释 | 本 Skill 示例 |
+|---|---|---|
+| `domain` | Skill 所属专家领域 | `technical`（frontmatter 与主仓一致） |
+| `source` | 谁产出这条信号 | `volume_insight` |
+| `source_type` | 某条证据来自什么材料 | 行情计算 → `market_data` |
+
+## 方向、置信度、风险等级怎么判断
+
+### `direction` 方向映射
+
+- 票差偏多、四指标共振偏多：`bullish`
+- 票差偏空、共振偏空：`bearish`
+- 票差不足、数据不足、或指标冲突：`neutral`
+- 风险提示不单独新增方向；用 `signal_type` 与 `meta.risk_notes` 表达。
+
+### `confidence` 置信度分档（结合 §4.3）
+
+- **0.75～0.90**：票差大（绝对值 ≥ 4）、证据一致、无矛盾  
+- **0.65～0.80**：票差 3、少量不确定性  
+- **0.50～0.65**：票差 2、或存在轻微分歧  
+- **&lt; 0.4**：强制 `neutral` 或证据不足，配合 `needs_human_review`
+
+**技术面补充**：单一背离、其余中性时，不宜给过高置信度；A/D 与 OBV 矛盾须 **下调**。
+
+### `risk_level` 风险等级分档
+
+- **low**：指标可算、票差清晰、无显著矛盾  
+- **medium**：背离、A/D 与 OBV 不一致、或 CMF 中性带内且其它分裂  
+- **high**：数据质量存疑、或强烈冲突且用户强求结论  
+
+### `time_horizon` 时间周期
+
+- 本 Skill 默认 **`short`**（日线量能、数周尺度）  
+- 明确分析 **数月以上日线趋势** 且无日内需求时可 **`mid`**  
+- 一般 **`long`** 留给宏观/产业周期类 Skill；本 Skill 少用  
+
+## 6. 质量检查
+
+输出前检查：
+
+- [ ] 是否有明确 `direction`
+- [ ] `confidence` 是否在 0.0 到 1.0
+- [ ] 是否写明 `signal_type`（本 Skill 为 `technical`）
+- [ ] 是否有至少一条核心 `signals`
+- [ ] 是否有证据来源（`meta.evidence` 至少 1 条）
+- [ ] 是否标注 `meta.time_horizon` 与 `meta.risk_level`
+- [ ] 缺失数据是否写进 `meta.uncertainties`
+- [ ] 是否需要人工复核（`needs_human_review`）
 
 ---
 
-## 6. 质量检查（输出前自检）
+## 附录：本仓库资源
 
-- [ ] `direction` 已填且合法
-- [ ] `confidence` ∈ [0.0, 1.0]
-- [ ] `signal_type` 为 `technical`
-- [ ] `signals` 至少 1 条短句
-- [ ] `meta.period`、`meta.time_horizon`、`meta.risk_level` 已填
-- [ ] `meta.evidence` 至少 1 条，且与推理一致
-- [ ] 数据缺失已写入 `meta.uncertainties`
-- [ ] 需人工复核时已设 `meta.needs_human_review: true`
+| 路径 | 用途 |
+|------|------|
+| `references/` | 指标释义与 `indicator-formulas.md` |
+| `scripts/` | `compute_*.py`、`analyzer_main.py` |
+| `assets/report-template.md` | 可选人类可读报告结构 |
 
----
-
-## 附录：资源路径（本仓库）
-
-- `references/` — 指标卡片与 `indicator-formulas.md`
-- `scripts/` — `compute_obv.py`、`compute_adl.py`、`compute_cmf.py`、`compute_vwap.py`、`analyzer_main.py`
-- `assets/report-template.md` — 人类可读报告结构示例
-- `assets/sample-output.md` — 填好的报告示例（虚构数据）
-
-主仓规范参见：[SKILL_TEMPLATE.md](https://github.com/duolongworld/AI_Renaissance/blob/develop/docs/SKILL_TEMPLATE.md)。
+主仓模板原文：[SKILL_TEMPLATE.md](https://github.com/duolongworld/AI_Renaissance/blob/develop/docs/SKILL_TEMPLATE.md)
