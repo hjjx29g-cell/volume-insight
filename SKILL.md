@@ -1,6 +1,6 @@
 ---
 name: volume_price_momentum_analysis
-description: 基于OBV、A/D Line、VWAP、CMF四大量价指标，判断标的资金流动方向、主力吸筹/派发状态、价格与量能配合度，适用于中短期趋势确认与反转预警。
+description: 基于 OBV、A/D Line、VWAP、CMF 四大量价指标，判断标的资金流动方向、主力吸筹/派发状态、价格与量能配合度，适用于中短期趋势确认与反转预警。
 owner_group: 专家2组（指标）
 domain: technical
 status: draft
@@ -10,269 +10,193 @@ status: draft
 
 ## 1. 适用范围
 
-所属小组：专家组-技术分析
+所属小组：专家2组（指标）
 
 适用任务：
-- 判断标的当前资金流入/流出方向与强度
-- 识别主力吸筹、派发或洗盘行为
-- 确认价格趋势的量能支撑是否健康
-- 预警量价背离导致的趋势反转风险
-- 辅助确定中短期入场/离场时机
-
-适用对象：个股、行业ETF、宽基指数
-
-适用时间周期：日线级别为主，可适配60分钟线做日内参考
+- 判断个股、行业 ETF、宽基指数当前资金流入/流出方向与强度。
+- 识别主力吸筹、派发、洗盘或量价背离风险。
+- 确认价格趋势是否获得成交量和资金流指标支撑。
+- 辅助中短期趋势确认、反转预警和入场/离场时机判断。
 
 边界说明：
-- 单一指标信号不可直接作为交易决策，需至少2个指标共振确认
-- 小盘股（流通市值<50亿）或庄股需人工复核，指标易被操纵
-- 重大消息日、停牌复牌首日指标失真，标记人工复核
-- 指标仅反映历史量价关系，不预测突发事件
+- 单一指标信号不可直接作为交易决策，至少需要 2 个指标共振确认。
+- 小盘股、庄股、重大消息日、停牌复牌首日的量价指标容易失真，需要人工复核。
+- 缺少分钟级数据时，可以使用滚动区间 VWAP 近似，但必须在 `meta.uncertainties` 中说明。
+- 本 Skill 只反映历史量价关系，不预测突发事件，也不直接生成交易指令。
 
 ## 2. 输入材料
 
 ### 必填输入
 
-- 标的：股票代码 / 指数代码
-- 时间范围：最近N个交易日（建议N≥60，覆盖至少3个月）
-- 核心数据材料：
-  - 日K线数据：开盘价、最高价、最低价、收盘价、成交量
-  - 日内分时数据（VWAP计算必需）：分钟级OHLCV
-- 数据来源：行情数据源（如wind、tushare、聚宽等）
+- 标的：股票代码 / 指数代码 / ETF 代码。
+- 时间范围：最近 N 个交易日，建议 N >= 60，覆盖至少 3 个月。
+- 核心数据材料：日 K 线 OHLCV，包括开盘价、最高价、最低价、收盘价、成交量。
+- 数据来源：行情数据源、人工上传 CSV、Wind、Tushare、聚宽或其他可信行情源。
 
 ### 可选输入
 
-- 行业/板块同期量价数据（用于相对强度对比）
-- 主力资金流向数据（验证指标信号）
-- 历史同期量价特征（季节性参考）
-- 人工标注的关键价位（支撑/阻力位）
+- 分钟级 OHLCV，用于更精确计算日内 VWAP。
+- 行业或指数同期量价数据，用于相对强度对比。
+- 主力资金流向、北向资金、龙虎榜等资金数据，用于验证量价信号。
+- 人工标注的关键支撑位、阻力位、重大事件日期。
 
 ### 缺失处理
 
-- 如果日K线数据缺失超过连续5个交易日，输出 `direction: "neutral"`，`confidence` 降至0.3以下，在 `meta.uncertainties` 写明数据缺口，并设 `meta.needs_human_review: true`
-- 如果缺少分钟级数据无法计算VWAP，跳过VWAP相关分析，在 `meta.uncertainties` 说明
-- 如果成交量数据为0（停牌），标记该日期为无效数据，不参与计算
+- 如果日 K 线必填字段缺失，输出 `direction: "neutral"`，`confidence` 降至 0.4 以下，在 `meta.uncertainties` 写明缺失字段，并把 `meta.needs_human_review` 设为 `true`。
+- 如果日 K 线数据连续缺失超过 5 个交易日，输出 `direction: "neutral"`，`confidence` 降至 0.3 以下，在 `meta.uncertainties` 写明数据缺口，并把 `meta.needs_human_review` 设为 `true`。
+- 如果缺少分钟级数据，则使用日线典型价滚动 VWAP 或区间累积 VWAP 近似，并在 `meta.uncertainties` 中说明。
+- 如果成交量为 0，应将该交易日标记为无效数据；若无效数据影响最近 20 个交易日判断，降低 `confidence` 并标记人工复核。
 
 ## 3. 分析步骤
 
 按下面步骤分析：
 
-1. **数据准备**：获取标的最近N日OHLCV数据，检查数据完整性
-2. **指标计算**：
-   - 计算OBV序列
-   - 计算A/D Line序列
-   - 计算日内VWAP（如有分钟数据）或滚动N日VWAP
-   - 计算CMF（默认20日周期）
-3. **极值检测**：识别价格和各指标的局部高点/低点（默认5日窗口确认）
-4. **背离扫描**：逐对检查价格与OBV、A/D Line、CMF的顶背离/底背离
-5. **趋势强度判定**：计算各指标N日斜率，与价格斜率对比
-6. **VWAP位置判定**：当前价格相对VWAP的位置及穿越历史
-7. **信号综合**：按权重汇总各子信号，生成最终direction和confidence
-8. **证据整理**：记录关键数值、对比结论、数据来源
-9. **不确定性标注**：写明数据缺口、指标冲突、需复核点
-10. **输出标准JSON**
+1. 明确分析对象、时间范围、数据来源和复权口径。
+2. 检查 OHLCV 字段完整性、有效交易日数量、成交量异常和连续缺口。
+3. 计算 OBV、A/D Line、CMF(20)、VWAP 或滚动 VWAP。
+4. 识别价格和指标的局部高点/低点，默认使用 5 日确认窗口和 60 日回溯窗口。
+5. 扫描价格与 OBV、A/D Line、CMF 的顶背离和底背离。
+6. 计算价格、OBV、A/D Line 的 20 日斜率，并判断趋势方向是否一致。
+7. 判断当前价格相对 VWAP 的位置、偏离幅度、穿越状态和成本排列。
+8. 按多指标共振、冲突、极端值规则汇总 `direction`、`confidence`、`risk_level`。
+9. 整理 `signals`、`reasoning`、`meta.key_findings`、`meta.evidence`、`meta.risk_notes` 和 `meta.uncertainties`。
+10. 输出与当前项目 `agents.signal.Signal` 对齐的标准 JSON。
 
 ## 4. 判断规则
 
-### 4.1 OBV（能量潮）判断规则
+### 4.1 OBV（能量潮）
 
-#### 规则OBV-1：OBV趋势确认
-- **指标**：OBV 20日斜率
-- **阈值**：斜率 > 0 为上升，斜率 < 0 为下降
-- **时间窗口**：20日
-- **判定**：
-  - OBV斜率 > 0 且价格20日斜率 > 0：`direction` 偏 `bullish`，`confidence` +0.1
-  - OBV斜率 < 0 且价格20日斜率 < 0：`direction` 偏 `bearish`，`confidence` +0.1
-  - OBV斜率与价格斜率方向相反：`direction` 偏 `neutral`，触发背离检查
+规则 OBV-1：趋势确认
+- 指标：OBV 20 日线性斜率与价格 20 日斜率。
+- 阈值：斜率 > 0 为上升，斜率 < 0 为下降。
+- 判定：OBV 与价格同向上升，偏 `bullish`，`confidence` 增加 0.10；同向下降，偏 `bearish`，`confidence` 增加 0.10；方向相反时触发背离检查并降低置信度。
+- evidence：记录最新 OBV、20 日斜率、价格 20 日变化。
 
-#### 规则OBV-2：OBV顶背离
-- **指标**：价格局部高点 vs OBV局部高点
-- **阈值**：价格新高（当前高点 > 前高点 × 1.02），OBV未新高（当前OBV高点 ≤ 前OBV高点 × 1.01）
-- **时间窗口**：回溯60日，极值确认窗口5日
-- **判定**：
-  - `direction`: `bearish`
-  - `confidence`: 0.65-0.85（单指标）；若同时A/D Line或CMF也背离，提升至0.80-0.95
-  - `risk_level`: `medium`；若出现在长期上涨后，`high`
-  - `signals`: 追加"OBV顶背离：上涨动能衰竭"
+规则 OBV-2：顶背离
+- 指标：价格局部高点 vs OBV 局部高点。
+- 阈值：价格新高为当前高点 > 前高点 x 1.02；OBV 未新高为当前 OBV 高点 <= 前 OBV 高点 x 1.01。
+- 时间窗口：回溯 60 日，极值确认窗口 5 日。
+- 判定：`direction` 偏 `bearish`，单指标 `confidence` 0.65-0.85；若 A/D Line 或 CMF 同时背离，提升至 0.80-0.95，`risk_level` 至少 `medium`。
+- signals：追加“OBV 顶背离：上涨动能衰竭”。
 
-#### 规则OBV-3：OBV底背离
-- **指标**：价格局部低点 vs OBV局部低点
-- **阈值**：价格新低（当前低点 < 前低点 × 0.98），OBV未新低（当前OBV低点 ≥ 前OBV低点 × 0.99）
-- **时间窗口**：回溯60日，极值确认窗口5日
-- **判定**：
-  - `direction`: `bullish`
-  - `confidence`: 0.60-0.80（单指标）；多指标共振提升至0.75-0.90
-  - `risk_level`: `medium`
-  - `signals`: 追加"OBV底背离：抛压衰竭，潜在见底"
+规则 OBV-3：底背离
+- 指标：价格局部低点 vs OBV 局部低点。
+- 阈值：价格新低为当前低点 < 前低点 x 0.98；OBV 未新低为当前 OBV 低点 >= 前 OBV 低点 x 0.99。
+- 时间窗口：回溯 60 日，极值确认窗口 5 日。
+- 判定：`direction` 偏 `bullish`，单指标 `confidence` 0.60-0.80；多指标共振时提升至 0.75-0.90，`risk_level` 至少 `medium`。
+- signals：追加“OBV 底背离：抛压衰竭，潜在见底”。
 
-#### 规则OBV-4：OBV突破
-- **指标**：OBV创60日新高/新低
-- **阈值**：当前OBV > 60日OBV最大值 × 0.995（突破）或 < 60日OBV最小值 × 1.005（跌破）
-- **判定**：
-  - 突破且价格同步突破：`direction` 强化为 `bullish`，`confidence` +0.15
-  - 跌破且价格同步跌破：`direction` 强化为 `bearish`，`confidence` +0.15
-  - 单独突破但价格未跟进：`direction` `neutral`，标记"OBV领先，待价格确认"
+规则 OBV-4：突破确认
+- 指标：OBV 是否创 60 日新高/新低，价格是否同步突破/跌破。
+- 阈值：当前 OBV > 60 日 OBV 最大值 x 0.995 视为突破；当前 OBV < 60 日 OBV 最小值 x 1.005 视为跌破。
+- 判定：OBV 与价格同步突破强化 `bullish`，同步跌破强化 `bearish`；若仅 OBV 领先而价格未跟进，则保持 `neutral`，并写入 `meta.uncertainties`。
 
----
+### 4.2 A/D Line（累积/派发线）
 
-### 4.2 A/D Line（累积/派发线）判断规则
+规则 AD-1：趋势方向
+- 指标：A/D Line 20 日斜率与价格 20 日斜率。
+- 判定：A/D 与价格同向上升，偏 `bullish`；同向下降，偏 `bearish`；A/D 上升但价格横盘或微跌，视为低位吸筹，偏 `bullish`，`confidence` 0.55-0.70；A/D 下降但价格横盘或微涨，视为派发，偏 `bearish`，`confidence` 0.55-0.70。
 
-#### 规则AD-1：A/D趋势方向
-- **指标**：A/D Line 20日斜率
-- **阈值**：斜率 > 0 为累积，斜率 < 0 为派发
-- **时间窗口**：20日
-- **判定**：
-  - A/D斜率 > 0 且价格斜率 > 0：健康上涨，`direction` `bullish`，`confidence` +0.1
-  - A/D斜率 < 0 且价格斜率 < 0：健康下跌，`direction` `bearish`，`confidence` +0.1
-  - A/D斜率 > 0 但价格横盘或微跌：主力吸筹，`direction` 偏 `bullish`，`confidence` 0.55-0.70
-  - A/D斜率 < 0 但价格横盘或微涨：主力派发，`direction` 偏 `bearish`，`confidence` 0.55-0.70
+规则 AD-2：顶背离
+- 指标：价格局部高点 vs A/D Line 局部高点。
+- 阈值：价格新高 > 前高点 x 1.02，A/D 未新高 <= 前高点对应 A/D 值 x 1.01。
+- 时间窗口：回溯 60 日，极值确认窗口 5 日。
+- 判定：`direction` 偏 `bearish`，`confidence` 0.70-0.90，`risk_level` 至少 `high`。
+- signals：追加“A/D 顶背离：主力高位派发”。
 
-#### 规则AD-2：A/D顶背离
-- **指标**：价格局部高点 vs A/D Line局部高点
-- **阈值**：价格新高（>前高点×1.02），A/D未新高（≤前高点×1.01）
-- **时间窗口**：回溯60日，极值确认窗口5日
-- **判定**：
-  - `direction`: `bearish`
-  - `confidence`: 0.70-0.90（A/D对主力行为更敏感，置信度略高于OBV）
-  - `risk_level`: `high`（派发信号通常更可靠）
-  - `signals`: 追加"A/D顶背离：主力高位派发"
+规则 AD-3：底背离
+- 指标：价格局部低点 vs A/D Line 局部低点。
+- 阈值：价格新低 < 前低点 x 0.98，A/D 未新低 >= 前低点对应 A/D 值 x 0.99。
+- 时间窗口：回溯 60 日，极值确认窗口 5 日。
+- 判定：`direction` 偏 `bullish`，`confidence` 0.65-0.85，`risk_level` 至少 `medium`。
+- signals：追加“A/D 底背离：主力低位吸筹”。
 
-#### 规则AD-3：A/D底背离
-- **指标**：价格局部低点 vs A/D Line局部低点
-- **阈值**：价格新低（<前低点×0.98），A/D未新低（≥前低点×0.99）
-- **时间窗口**：回溯60日，极值确认窗口5日
-- **判定**：
-  - `direction`: `bullish`
-  - `confidence`: 0.65-0.85
-  - `risk_level`: `medium`
-  - `signals`: 追加"A/D底背离：主力低位吸筹"
+规则 AD-4：A/D 与价格强度比
+- 指标：A/D Line 20 日变化率 / 价格 20 日变化率。
+- 阈值：比值 > 1.5 表示 A/D 强于价格，资金积极流入；比值 < 0.5 表示 A/D 弱于价格，资金跟进不足。
+- 判定：价格上涨且比值 > 1.5 偏 `bullish`；价格上涨但比值 < 0.5 偏 `neutral` 或 `bearish`；价格下跌但比值 > 1.5 偏 `neutral` 或 `bullish`，并提示吸筹迹象。
 
-#### 规则AD-4：A/D与价格强度比
-- **指标**：A/D Line 20日变化率 / 价格20日变化率
-- **阈值**：
-  - 比值 > 1.5：A/D强于价格，资金积极流入
-  - 比值 < 0.5：A/D弱于价格，资金跟进不足
-- **判定**：
-  - 比值 > 1.5 且价格上涨：`direction` `bullish`，`confidence` +0.1
-  - 比值 < 0.5 且价格上涨：`direction` `neutral` 偏 `bearish`，`confidence` 0.50-0.65
-  - 比值 > 1.5 且价格下跌：`direction` `neutral` 偏 `bullish`（吸筹迹象），`confidence` 0.50-0.65
+### 4.3 VWAP（成交量加权平均价格）
 
----
+规则 VWAP-1：位置判定
+- 指标：当前收盘价 vs 当日/滚动 VWAP。
+- 阈值：偏移幅度 = (收盘价 - VWAP) / VWAP。
+- 判定：偏移 > +2% 且持续 3 日以上，偏 `bullish`；偏移 < -2% 且持续 3 日以上，偏 `bearish`；偏移在 +/-1% 内，偏 `neutral`。
+- evidence：记录最新收盘价、VWAP、偏离百分比。
 
-### 4.3 VWAP（成交量加权平均价格）判断规则
+规则 VWAP-2：穿越信号
+- 指标：价格上穿/下穿 VWAP。
+- 阈值：前一日收盘价 < VWAP 且当日收盘价 > VWAP 为上穿；反之为下穿；成交量放大为当日成交量 > 20 日均量 x 1.2。
+- 判定：放量上穿偏 `bullish`，`confidence` 0.60-0.75；放量下穿偏 `bearish`，`confidence` 0.60-0.75；无量穿越保持 `neutral`，`confidence` 0.40-0.50。
 
-#### 规则VWAP-1：VWAP位置判定
-- **指标**：当前收盘价 vs 当日/滚动N日VWAP
-- **阈值**：偏移幅度 = (收盘价 - VWAP) / VWAP
-- **判定**：
-  - 偏移 > +2% 且持续3日以上：`direction` `bullish`，`confidence` +0.1，`signals`: "站稳VWAP上方，多头主导"
-  - 偏移 < -2% 且持续3日以上：`direction` `bearish`，`confidence` +0.1，`signals`: "跌破VWAP下方，空头主导"
-  - 偏移在 ±1% 内：`direction` `neutral`，`signals`: "围绕VWAP震荡，方向不明"
+规则 VWAP-3：支撑/阻力测试
+- 指标：最近 10 个交易日触碰 VWAP 次数及后续走势。
+- 阈值：触碰 VWAP >= 3 次。
+- 判定：触碰后反弹并收于 VWAP 上方，偏 `bullish`；触碰后跌破并收于 VWAP 下方，偏 `bearish`。
 
-#### 规则VWAP-2：VWAP穿越信号
-- **指标**：价格上穿/下穿VWAP
-- **阈值**：前一日收盘价 < VWAP 且当日收盘价 > VWAP（上穿）；反之亦然
-- **判定**：
-  - 上穿 + 成交量放大（当日成交量 > 20日均量 × 1.2）：`direction` `bullish`，`confidence` 0.60-0.75，`signals`: "放量突破VWAP，趋势转多"
-  - 下穿 + 成交量放大：`direction` `bearish`，`confidence` 0.60-0.75，`signals`: "放量跌破VWAP，趋势转空"
-  - 无量穿越：`direction` `neutral`，`confidence` 0.40-0.50，`signals`: "VWAP穿越但量能不足，待确认"
+规则 VWAP-4：成本排列
+- 指标：当前价格、20 日 VWAP、60 日 VWAP。
+- 阈值：价格 > 20 日 VWAP > 60 日 VWAP 为多头排列；价格 < 20 日 VWAP < 60 日 VWAP 为空头排列。
+- 判定：多头排列强化 `bullish`，空头排列强化 `bearish`，`confidence` 增加 0.15。
 
-#### 规则VWAP-3：VWAP支撑/阻力测试
-- **指标**：价格触碰VWAP次数及后续走势
-- **阈值**：最近10个交易日内触碰VWAP ≥ 3次
-- **判定**：
-  - 触碰后反弹（收盘价 > VWAP）：`direction` 偏 `bullish`，`confidence` 0.55-0.70，`signals`: "VWAP支撑有效"
-  - 触碰后跌破（收盘价 < VWAP）：`direction` 偏 `bearish`，`confidence` 0.55-0.70，`signals`: "VWAP阻力有效/支撑失效"
+### 4.4 CMF（钱流量指标）
 
-#### 规则VWAP-4：VWAP与长期成本偏离
-- **指标**：当前价格 vs 20日VWAP vs 60日VWAP
-- **阈值**：
-  - 价格 > 20日VWAP > 60日VWAP：多头排列
-  - 价格 < 20日VWAP < 60日VWAP：空头排列
-- **判定**：
-  - 多头排列：`direction` `bullish`，`confidence` +0.15
-  - 空头排列：`direction` `bearish`，`confidence` +0.15
+规则 CMF-1：零轴穿越
+- 指标：CMF(20) 值及穿越方向。
+- 阈值：CMF = 0 为零轴；+/-0.05 以内视为中性区。
+- 判定：上穿零轴偏 `bullish`，下穿零轴偏 `bearish`；零轴附近为 `neutral`。
 
----
+规则 CMF-2：强度区间
+- 指标：CMF(20) 最新值。
+- 阈值：CMF > +0.25 为强势流入；+0.05 到 +0.25 为温和流入；-0.05 到 +0.05 为中性；-0.25 到 -0.05 为温和流出；< -0.25 为强势流出。
+- 判定：强势流入且价格上涨，偏 `bullish`，`confidence` 0.70-0.85；强势流出且价格下跌，偏 `bearish`，`confidence` 0.70-0.85；强势流入但价格横盘，提示吸筹；强势流出但价格横盘，提示派发。
 
-### 4.4 CMF（钱流量指标）判断规则
+规则 CMF-3：CMF 背离
+- 指标：价格局部高点/低点 vs CMF 局部高点/低点。
+- 阈值：同 OBV 背离阈值。
+- 时间窗口：回溯 60 日，极值确认窗口 5 日。
+- 判定：顶背离偏 `bearish`，`confidence` 0.65-0.85；底背离偏 `bullish`，`confidence` 0.60-0.80。
 
-#### 规则CMF-1：CMF零轴穿越
-- **指标**：CMF（20日）值及穿越方向
-- **阈值**：CMF = 0 为零轴
-- **判定**：
-  - CMF 上穿零轴（前日 < 0 且当日 > 0）：`direction` `bullish`，`confidence` 0.55-0.70，`signals`: "CMF上穿零轴，资金由流出转流入"
-  - CMF 下穿零轴（前日 > 0 且当日 < 0）：`direction` `bearish`，`confidence` 0.55-0.70，`signals`: "CMF下穿零轴，资金由流入转流出"
-  - CMF 在零轴附近（±0.05）：`direction` `neutral`，`signals`: "CMF中性，资金平衡"
+规则 CMF-4：持续性
+- 指标：CMF 连续处于流入或流出区间的天数。
+- 阈值：连续 > 10 日。
+- 判定：连续流入强化 `bullish`，连续流出强化 `bearish`，`confidence` 增加 0.10。
 
-#### 规则CMF-2：CMF强度区间
-- **指标**：CMF绝对值大小
-- **阈值**：
-  - CMF > +0.25：强势流入
-  - CMF 在 +0.05 ~ +0.25：温和流入
-  - CMF 在 -0.05 ~ +0.05：中性
-  - CMF 在 -0.25 ~ -0.05：温和流出
-  - CMF < -0.25：强势流出
-- **判定**：
-  - 强势流入 + 价格上涨：`direction` `bullish`，`confidence` 0.70-0.85，`risk_level`: `low`
-  - 强势流出 + 价格下跌：`direction` `bearish`，`confidence` 0.70-0.85，`risk_level`: `low`
-  - 强势流入 + 价格横盘：`direction` 偏 `bullish`，`confidence` 0.55-0.70，`signals`: "资金暗流吸筹"
-  - 强势流出 + 价格横盘：`direction` 偏 `bearish`，`confidence` 0.55-0.70，`signals`: "资金暗流派发"
+### 4.5 多指标共振与冲突
 
-#### 规则CMF-3：CMF背离
-- **指标**：价格局部高点/低点 vs CMF局部高点/低点
-- **阈值**：同OBV/AD背离阈值
-- **时间窗口**：回溯60日，极值确认窗口5日
-- **判定**：
-  - 顶背离：`direction` `bearish`，`confidence` 0.65-0.85
-  - 底背离：`direction` `bullish`，`confidence` 0.60-0.80
+规则 COMBINE-1：多指标共振
+- 条件：至少 3 个指标给出同向信号。
+- 判定：3-4 个指标同为 `bullish`，最终 `direction` 为 `bullish`；3-4 个指标同为 `bearish`，最终 `direction` 为 `bearish`；`confidence` = max(单指标置信度) + 0.10，上限 0.95。
 
-#### 规则CMF-4：CMF趋势持续性
-- **指标**：CMF连续处于同一区间天数
-- **阈值**：连续 > 10日
-- **判定**：
-  - 连续 > 10日处于流入区间（>0）：`direction` 强化 `bullish`，`confidence` +0.1
-  - 连续 > 10日处于流出区间（<0）：`direction` 强化 `bearish`，`confidence` +0.1
+规则 COMBINE-2：指标冲突
+- 条件：指标方向明显不一致，例如 2 个看多、2 个看空，或 OBV 与 A/D Line 方向相反且斜率均显著。
+- 判定：最终 `direction` 为 `neutral`，`confidence` 0.40-0.55；`signals` 追加“指标信号冲突，方向不明”；`meta.uncertainties` 写明各指标方向和矛盾点；`meta.needs_human_review` 设为 `true`。
 
----
+规则 COMBINE-3：极端值预警
+- 条件：CMF > +0.50 或 < -0.50，或 VWAP 偏离 > 5%，或成交量突然放大至 20 日均量 3 倍以上。
+- 判定：不单独改变 `direction`，但将 `risk_level` 提升至 `high`，写入 `meta.risk_notes`，并把 `meta.needs_human_review` 设为 `true`。
 
-### 4.5 多指标共振与冲突处理
+规则 COMBINE-4：时间周期加权
+- 短期信号：VWAP 日内/5 日、CMF 5 日，权重 0.30。
+- 中期信号：OBV 20 日、A/D Line 20 日、CMF 20 日，权重 0.50。
+- 长期信号：OBV 60 日、A/D Line 60 日、VWAP 60 日，权重 0.20。
+- 综合得分 = sum(信号方向 x 权重)，其中 `bullish` 为 +1，`bearish` 为 -1，`neutral` 为 0。
+- 最终方向：得分 > +0.30 为 `bullish`；得分 < -0.30 为 `bearish`；否则为 `neutral`。
 
-#### 规则COMBINE-1：多指标共振
-- **条件**：至少3个指标给出同向信号
-- **判定**：
-  - 3-4个指标 `bullish`：`direction` `bullish`，`confidence` = max(单个confidence) + 0.1，上限0.95
-  - 3-4个指标 `bearish`：`direction` `bearish`，`confidence` = max(单个confidence) + 0.1，上限0.95
+### 4.6 证据、周期和风险字段规则
 
-#### 规则COMBINE-2：指标冲突
-- **条件**：指标方向不一致（如OBV看多、CMF看空）
-- **判定**：
-  - `direction`: `neutral`
-  - `confidence`: 0.40-0.55
-  - `signals`: 追加"指标信号冲突，方向不明"
-  - `meta.uncertainties`: 写明各指标方向及矛盾点
-  - `meta.needs_human_review`: `true`
-
-#### 规则COMBINE-3：单一指标极端信号
-- **条件**：某一指标出现极端值（如CMF > +0.5 或 < -0.5，或VWAP偏离 > 5%）
-- **判定**：
-  - 标记为"极端值预警"
-  - 不直接改变 `direction`，但提升 `risk_level` 至 `high`
-  - `meta.needs_human_review`: `true`
-
-#### 规则COMBINE-4：时间周期加权
-- **短期信号**（VWAP日内/5日、CMF 5日）：权重 0.3
-- **中期信号**（OBV 20日、A/D 20日、CMF 20日）：权重 0.5
-- **长期信号**（OBV 60日、A/D 60日、VWAP 60日）：权重 0.2
-- **综合得分** = Σ(信号方向 × 权重)，方向取+1(bullish)/-1(bearish)/0(neutral)
-- **最终direction**：
-  - 得分 > +0.3：`bullish`
-  - 得分 < -0.3：`bearish`
-  - 否则：`neutral`
+- `meta.evidence` 至少记录价格、成交量、OBV、A/D Line、CMF、VWAP 中的核心证据，`source_type` 使用 `market_data`；如有主力资金数据，使用 `fund_flow`。
+- `meta.time_horizon` 根据信号来源确定：VWAP 穿越和短期 CMF 信号为 `short`；OBV/A-D/CMF 20 日趋势为 `mid`；60 日背离和成本排列为 `mid` 或 `long`。
+- `meta.risk_level` 默认为 `low`；出现单指标背离、指标冲突或数据缺口时为 `medium`；出现多指标背离、极端值、重大缺口或复牌首日时为 `high`。
+- `meta.key_findings` 提炼 1-5 条最重要的量价结论，必须能被 `meta.evidence` 支撑。
+- `meta.risk_notes` 记录背离、极端偏离、成交量异常、数据口径问题等风险提示。
+- `meta.uncertainties` 记录缺失数据、口径不明、分钟级 VWAP 缺失、指标冲突等不确定性。
+- `meta.needs_human_review` 在数据缺失、指标严重冲突、极端值、小盘股、重大消息日、停牌复牌首日或证据来源可信度不足时设为 `true`。
+- 专业追溯字段可以放在 `meta.sub_signals` 和 `meta.divergence_detected`，但不得改变标准顶层字段。
 
 ## 5. 标准输出
 
-最终输出JSON：
+最终输出 JSON，顶层字段与当前项目 `agents.signal.Signal` 对齐。证据、风险等级、时间周期、关键发现、不确定性和人工复核点统一放在 `meta` 中。
 
 ```json
 {
@@ -287,7 +211,7 @@ status: draft
   "meta": {
     "output_version": "0.1",
     "skill_name": "volume_price_momentum_analysis",
-    "owner_group": "专家组-技术分析",
+    "owner_group": "专家2组（指标）",
     "target": "",
     "period": "",
     "time_horizon": "short | mid | long",
@@ -306,96 +230,90 @@ status: draft
     ],
     "risk_notes": [],
     "uncertainties": [],
-    "needs_human_review": true,
-    "sub_signals": {
-      "obv": {
-        "signal": "",
-        "direction": "",
-        "confidence": 0.0,
-        "latest_value": 0.0,
-        "slope_20d": 0.0
-      },
-      "ad_line": {
-        "signal": "",
-        "direction": "",
-        "confidence": 0.0,
-        "latest_value": 0.0,
-        "slope_20d": 0.0
-      },
-      "vwap": {
-        "signal": "",
-        "direction": "",
-        "confidence": 0.0,
-        "latest_value": 0.0,
-        "price_deviation_pct": 0.0
-      },
-      "cmf": {
-        "signal": "",
-        "direction": "",
-        "confidence": 0.0,
-        "latest_value": 0.0,
-        "zone": ""
-      }
-    },
-    "divergence_detected": {
-      "bearish_divergence": false,
-      "bullish_divergence": false,
-      "involved_indicators": [],
-      "divergence_span_days": 0
-    }
+    "needs_human_review": true
   }
 }
 ```
 
-### meta.sub_signals 说明
+说明：
+- `direction` 只能是 `bullish`、`bearish`、`neutral`，不能新增 `risk_warning`。
+- `confidence` 范围是 0.0 到 1.0，证据充分且多指标一致时可高于 0.80，证据不足或冲突时应低于 0.60。
+- `signals` 写最核心的短句，便于调试和 UI 展示。
+- `reasoning` 写简明推理摘要，详细证据放入 `meta.evidence`。
+- `source` 固定为 `volume_price_momentum_analysis`。
+- `signal_type` 固定为 `technical`。
+- `weight` 第一阶段固定为 1.0，后续由仲裁层决定是否调整。
 
-`meta.sub_signals` 记录四个指标的独立判断结果，便于开发2组做信号追溯和仲裁：
+## 字段中英对照
 
-- `obv.signal`：OBV子信号描述，如"OBV顶背离"、"OBV趋势上升"
-- `obv.direction`：OBV独立判断方向
-- `obv.confidence`：OBV独立置信度
-- `obv.latest_value`：最新OBV值
-- `obv.slope_20d`：OBV 20日斜率
+| 字段 | 中文含义 | 填写说明 |
+|---|---|---|
+| `direction` | 方向 | `bullish` 看多；`bearish` 看空；`neutral` 中性 |
+| `confidence` | 置信度 | 0.0 到 1.0，越高表示越确定 |
+| `reasoning` | 推理摘要 | 简要说明为什么得出这个结论 |
+| `signals` | 核心信号 | 放最重要的量价信号短句 |
+| `source` | 信号来源 | 固定写 Skill 名 |
+| `signal_type` | 信号类型 | 固定写 `technical` |
+| `stock_code` | 股票代码 | 没有股票代码时可留空，并在 `meta.target` 写标的名称 |
+| `weight` | 权重 | 第一阶段填 1.0 |
+| `meta` | 证据包/上下文包 | 放证据、风险等级、周期、人工复核点等 |
+| `time_horizon` | 时间周期 | `short` 短期；`mid` 中期；`long` 长期 |
+| `risk_level` | 风险等级 | `low` 低；`medium` 中；`high` 高 |
+| `evidence` | 证据 | 记录来源、日期、指标、数值和说明 |
+| `uncertainties` | 不确定性 | 数据缺失、口径不一致、需要复核的地方 |
+| `needs_human_review` | 是否需要人工复核 | `true` 是；`false` 否 |
 
-其他三个指标字段含义相同。
+## source_type 来源类型
 
-### meta.divergence_detected 说明
+本 Skill 优先使用以下 `source_type`：
 
-- `bearish_divergence`：是否检测到顶背离
-- `bullish_divergence`：是否检测到底背离
-- `involved_indicators`：参与背离的指标列表，如["OBV", "CMF"]
-- `divergence_span_days`：背离跨度（两个极值点之间的交易日数）
+| source_type | 中文含义 | 示例 |
+|---|---|---|
+| `market_data` | 行情数据 | 价格、成交量、OHLCV、技术指标 |
+| `fund_flow` | 资金流数据 | 主力资金、北向资金、龙虎榜 |
+| `industry_data` | 行业数据 | 行业指数、行业成交量、相对强度 |
+| `news` | 新闻 | 重大消息日或事件冲击 |
+| `expert_input` | 人工输入 | 人工标注支撑/阻力、复权口径、异常交易日 |
+
+## 方向、置信度、风险等级怎么判断
+
+### direction 方向映射
+
+- 正面资金流入、趋势确认、量价同步改善：`bullish`。
+- 资金流出、趋势破坏、顶背离、放量跌破成本线：`bearish`。
+- 数据不足、信号冲突、围绕 VWAP 震荡或仅监控提示：`neutral`。
+
+### confidence 置信度分档
+
+- `0.80 - 1.00`：至少 3 个指标同向，且证据完整。
+- `0.60 - 0.80`：2 个以上指标同向，但存在少量不确定性。
+- `0.40 - 0.60`：证据有限、指标冲突或只有单一指标支持。
+- `< 0.40`：必填输入不足或数据质量较差，通常使用 `neutral` 并标记人工复核。
+
+### risk_level 风险等级分档
+
+- `low`：量价配合正常，没有明显背离或数据问题。
+- `medium`：出现单指标背离、指标冲突、短期成交量异常或轻微数据缺口。
+- `high`：出现多指标背离、极端偏离、重大数据缺口、复牌首日或重大消息日。
+
+### time_horizon 时间周期
+
+- `short`：VWAP 穿越、短期 CMF 变化、事件日成交量异动。
+- `mid`：OBV/A-D/CMF 20 日趋势、20 日 VWAP 偏离。
+- `long`：60 日背离、长期成本排列、跨季度资金趋势。
 
 ## 6. 质量检查
 
 输出前检查：
 
-- [ ] `direction` 是否明确（bullish/bearish/neutral）
-- [ ] `confidence` 是否在 0.0-1.0 范围内
-- [ ] `signal_type` 是否为 "technical"
-- [ ] `signals` 是否至少包含一条核心信号
-- [ ] `meta.sub_signals` 是否四个指标都有记录
-- [ ] `meta.evidence` 是否至少包含价格、成交量、各指标最新值
-- [ ] `meta.time_horizon` 是否根据信号类型正确标注（VWAP日内信号标short，OBV/AD中期标mid）
-- [ ] `meta.risk_level` 是否与背离、极端值、指标冲突匹配
-- [ ] `meta.uncertainties` 是否写明数据缺口或指标冲突
-- [ ] `meta.needs_human_review` 是否在以下情况设为true：
-  - 数据缺失超过连续5日
-  - 指标信号严重冲突（2个看多2个看空）
-  - 检测到极端值（CMF>0.5或<-0.5，VWAP偏离>5%）
-  - 小盘股（流通市值<50亿）
-  - 重大消息日或停牌复牌首日
-
-## 7. 目录结构说明
-
-- `SKILL.md` — **主规范**（适用范围、输入、判断规则、标准 JSON）
-- `references/` — 指标卡片与公式
-- `scripts/` — 指标计算与 `analyzer_main.py`
-- `assets/` — Markdown 报告模板（可与 `meta.report_markdown` 联调）
-- `examples/`、`tests/` — 示例与单测
-
-## 8. 示例
-
-`examples/run_example.sh` 演示了如何使用 sample_data.csv 进行分析。
-
+- 是否有明确 `direction`。
+- `confidence` 是否在 0.0 到 1.0。
+- 是否写明 `signal_type: "technical"`。
+- 是否有至少一条核心 `signals`。
+- 是否有证据来源，且 `meta.evidence` 至少 1 条。
+- 是否标注 `meta.time_horizon` 与 `meta.risk_level`。
+- 缺失数据、分钟级 VWAP 不可用、复权口径不明是否写入 `meta.uncertainties`。
+- 是否根据风险和数据质量正确设置 `meta.needs_human_review`。
+- `meta.key_findings` 是否能被 `meta.evidence` 支撑。
+- 如果保留 `meta.sub_signals` 或 `meta.divergence_detected`，是否只作为追溯字段，不影响标准顶层字段。
 

@@ -1,3 +1,3 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-python ../scripts/analyzer_main.py sample_data.csv
+python3 ../scripts/analyzer_main.py sample_data.csv --stock-code TEST --target 示例公司

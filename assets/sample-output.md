@@ -1,39 +1,100 @@
-# 📊 量能综合分析报告 – 示例公司 (TEST)
-**分析周期**：2025-01-02 至 2026-04-30（共 320 个交易日）
+# 标准 Signal JSON 输出示例
 
-## 1️⃣ OBV – 资金方向
-- 趋势：上升
-- 背离信号：无
-- 解读：OBV 持续走高，资金总体净流入，与价格同步上涨，量价健康。
-
-## 2️⃣ A/D Line – 资金质量
-- 趋势：累积（上升）
-- 背离信号：无
-- 与 OBV 一致性：一致，确认资金流入质量良好。
-
-## 3️⃣ CMF(20) – 资金强度
-- 当前值：+0.23
-- 评级：温和流入
-- 近期变化：近 5 期 CMF 从 +0.18 升至 +0.23，流入强度逐步增强。
-
-## 4️⃣ VWAP – 成本基准
-- 区间 VWAP：105.30
-- 最新收盘价：110.20（高于 VWAP）
-- 含义：当前价格高于市场平均成本，多方占据优势。
-
-## 5️⃣ 综合结论与操作启示
-- **综合评级**：看多（高置信度）
-- **关键逻辑**：OBV 趋势向上、CMF 温和流入（>+0.1）、A/D 持续累积、价格高于 VWAP，四指标共振偏多。
-- **操作建议**：
-  - 做多条件：价格回踩 VWAP (约105.30) 且 CMF 保持 >+0.05 时加仓。
-  - 做空/离场条件：跌破 OBV 上升趋势线或 CMF 转负。
-  - 止损参考：收盘价跌破最近 20 日低点。
-
-## 6️⃣ 数据附录（最近5日）
-| 日期 | OBV | A/D | CMF | VWAP |
-|------|-----|-----|-----|------|
-| 2026-04-24 | 15.2M | 8.1M | +0.21 | 105.10 |
-| 2026-04-25 | 15.5M | 8.3M | +0.22 | 105.15 |
-| 2026-04-26 | 15.7M | 8.5M | +0.22 | 105.20 |
-| 2026-04-29 | 16.0M | 8.7M | +0.23 | 105.25 |
-| 2026-04-30 | 16.2M | 8.9M | +0.23 | 105.30 |
+```json
+{
+  "direction": "bullish",
+  "confidence": 0.85,
+  "reasoning": "基于 9 条OHLCV数据计算 OBV、A/D Line、VWAP、CMF；当前 3 个指标偏多、0 个指标偏空，综合判断为 bullish。",
+  "signals": [
+    "多指标共振偏多",
+    "价格站上VWAP",
+    "CMF中性"
+  ],
+  "source": "volume_price_momentum_analysis",
+  "signal_type": "technical",
+  "stock_code": "TEST",
+  "weight": 1.0,
+  "meta": {
+    "output_version": "0.1",
+    "skill_name": "volume_price_momentum_analysis",
+    "owner_group": "专家2组（指标）",
+    "target": "示例公司",
+    "period": "2025-01-02 至 2025-01-10",
+    "time_horizon": "mid",
+    "risk_level": "low",
+    "key_findings": [
+      "OBV、A/D、VWAP、CMF 中至少 3 个指标偏多。",
+      "最新收盘价相对VWAP偏离 4.04%。",
+      "CMF(20) 为 0.0000，状态为中性。"
+    ],
+    "evidence": [
+      {
+        "source_type": "market_data",
+        "source_name": "sample_data.csv",
+        "date": "2025-01-10",
+        "metric": "close",
+        "value": "110.0",
+        "comparison": "latest",
+        "note": "最新收盘价"
+      },
+      {
+        "source_type": "market_data",
+        "source_name": "sample_data.csv",
+        "date": "2025-01-10",
+        "metric": "VWAP",
+        "value": "105.7333",
+        "comparison": "deviation=4.04%",
+        "note": "价格站上VWAP"
+      },
+      {
+        "source_type": "market_data",
+        "source_name": "sample_data.csv",
+        "date": "2025-01-10",
+        "metric": "CMF(20)",
+        "value": "0.0",
+        "comparison": "中性",
+        "note": "CMF中性"
+      }
+    ],
+    "risk_notes": [],
+    "uncertainties": [],
+    "needs_human_review": false,
+    "sub_signals": {
+      "obv": {
+        "signal": "OBV趋势上升",
+        "direction": "bullish",
+        "confidence": 0.6,
+        "latest_value": 10250000.0,
+        "slope_20d": 1278333.33
+      },
+      "ad_line": {
+        "signal": "A/D累积上升",
+        "direction": "bullish",
+        "confidence": 0.6,
+        "latest_value": 3950000.0,
+        "slope_20d": 449444.44
+      },
+      "vwap": {
+        "signal": "价格站上VWAP",
+        "direction": "bullish",
+        "confidence": 0.62,
+        "latest_value": 105.7333,
+        "price_deviation_pct": 4.04
+      },
+      "cmf": {
+        "signal": "CMF中性",
+        "direction": "neutral",
+        "confidence": 0.5,
+        "latest_value": 0.0,
+        "zone": "neutral"
+      }
+    },
+    "divergence_detected": {
+      "bearish_divergence": false,
+      "bullish_divergence": false,
+      "involved_indicators": [],
+      "divergence_span_days": 0
+    }
+  }
+}
+```
